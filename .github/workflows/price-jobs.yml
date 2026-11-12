@@ -1,0 +1,28 @@
+# The hourly job only asks the app to continue the shared queue. It does not look up products.
+name: Scheduled price jobs
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hourly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Continue the update queue
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+          JOB_SECRET: ${{ secrets.JOB_SECRET }}
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -o /tmp/enrich-body -w "%{http_code}" -X POST -H "Authorization: Bearer ${JOB_SECRET}" "${SITE_URL}/api/jobs/enrich" 2>/dev/null || printf '000')
+          if [ "$code" != "200" ]; then
+            printf '%s\n' '{"event":"fail","code":"request"}' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          cat /tmp/enrich-body >> "$GITHUB_STEP_SUMMARY"
