@@ -1,10 +1,17 @@
 # The hourly job only asks the app to continue the shared queue. It does not look up products.
+# The nightly job checks out the private app and runs the price check on this runner.
+# Logs are counts only. This workflow has no pull request trigger.
 name: Scheduled price jobs
 
 on:
   schedule:
     - cron: "*/15 * * * *"
   workflow_dispatch:
+    inputs:
+      force_nightly:
+        description: Run the nightly check even before today's configured time
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -26,3 +33,47 @@ jobs:
             exit 1
           fi
           cat /tmp/enrich-body >> "$GITHUB_STEP_SUMMARY"
+
+  nightly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Require configuration
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          if [ -z "$DATABASE_URL" ] || [ -z "$PRIVATE_REPO_TOKEN" ]; then
+            printf '%s\n' '{"event":"fail","code":"missing_config","job":"nightly"}' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+      - name: Check out the private app
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ericianni/christmas-list
+          ref: main
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          persist-credentials: false
+          path: app
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+      - name: Install
+        working-directory: app
+        run: |
+          if ! npm ci --silent --no-audit --no-fund >/dev/null 2>&1; then
+            printf '%s\n' '{"event":"fail","code":"install_error","job":"nightly"}' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+      - name: Nightly check
+        working-directory: app
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          NOTIFY_FROM_EMAIL: ${{ secrets.NOTIFY_FROM_EMAIL }}
+          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          NIGHTLY_FORCE: ${{ inputs.force_nightly && '1' || '0' }}
+        run: npm run nightly:public --silent
