@@ -4,7 +4,9 @@ This repository only holds a schedule. Every 15 minutes it starts two jobs.
 
 The hourly job sends one authenticated request to the Family Parcel website. The website decides whether any daytime update work is due.
 
-The nightly job checks out the private app and runs the price check on this runner when the database says a nightly run is due. It uses this runner's own lookup allowance. If the required secrets are missing, it stops with a count-only `missing_config` line and does not check out the app.
+The nightly job first runs `due/nightly-due.mjs`. When the nightly is not due, the summary is `{"event":"nightly","outcome":"not_due"}` and the private app is not checked out. When it is due, the job checks out the private app and runs the price check. It uses this runner's own lookup allowance. If `DATABASE_URL` is missing, it stops with a count-only `missing_config` line.
+
+An outside scheduler can start the workflow every 15 minutes. The steps are in `docs/outside-scheduler.md`. The GitHub schedule stays as a backup. A nightly job that is already running is not cancelled.
 
 Logs and run summaries contain only counts, timings, status codes, and limit numbers. They must not contain names, links, prices, product codes, addresses, SQL, or stack traces. Pull requests from forks never run this workflow, because it has no pull request trigger.
 

@@ -1,5 +1,5 @@
 # The hourly job only asks the app to continue the shared queue. It does not look up products.
-# The nightly job checks out the private app and runs the price check on this runner.
+# The nightly job checks the database first and checks out the private app only when a run is due.
 # Logs are counts only. This workflow has no pull request trigger.
 name: Scheduled price jobs
 
@@ -37,17 +37,41 @@ jobs:
   nightly:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    concurrency:
+      group: nightly-price-check
+      cancel-in-progress: false
     steps:
-      - name: Require configuration
+      - name: Check out this repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: See if the nightly is due
+        id: due
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          NIGHTLY_FORCE: ${{ inputs.force_nightly && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DATABASE_URL" ]; then
+            printf '%s\n' '{"event":"fail","code":"missing_config","job":"nightly"}' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          if ! npm ci --silent --no-audit --no-fund --prefix due >/dev/null 2>&1; then
+            printf '%s\n' '{"event":"fail","code":"install_error","job":"nightly"}' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          node due/nightly-due.mjs
+      - name: Require the checkout token
+        if: steps.due.outputs.due == 'yes'
+        env:
           PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
         run: |
-          if [ -z "$DATABASE_URL" ] || [ -z "$PRIVATE_REPO_TOKEN" ]; then
+          if [ -z "$PRIVATE_REPO_TOKEN" ]; then
             printf '%s\n' '{"event":"fail","code":"missing_config","job":"nightly"}' >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
       - name: Check out the private app
+        if: steps.due.outputs.due == 'yes'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: ericianni/christmas-list
@@ -56,10 +80,12 @@ jobs:
           persist-credentials: false
           path: app
       - name: Set up Node
+        if: steps.due.outputs.due == 'yes'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
       - name: Install
+        if: steps.due.outputs.due == 'yes'
         working-directory: app
         run: |
           if ! npm ci --silent --no-audit --no-fund >/dev/null 2>&1; then
@@ -67,6 +93,7 @@ jobs:
             exit 1
           fi
       - name: Nightly check
+        if: steps.due.outputs.due == 'yes'
         working-directory: app
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
