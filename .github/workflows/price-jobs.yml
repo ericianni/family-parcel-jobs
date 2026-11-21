@@ -19,7 +19,7 @@ permissions:
 jobs:
   hourly:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 7
     steps:
       - name: Continue the update queue
         env:
@@ -27,9 +27,12 @@ jobs:
           JOB_SECRET: ${{ secrets.JOB_SECRET }}
         run: |
           set -euo pipefail
-          code=$(curl -sS -o /tmp/enrich-body -w "%{http_code}" -X POST -H "Authorization: Bearer ${JOB_SECRET}" "${SITE_URL}/api/jobs/enrich" 2>/dev/null || printf '000')
+          code=$(curl -sS --max-time 330 -o /tmp/enrich-body -w "%{http_code}" -X POST -H "Authorization: Bearer ${JOB_SECRET}" "${SITE_URL}/api/jobs/enrich" 2>/dev/null || printf '000')
           if [ "$code" != "200" ]; then
-            printf '%s\n' '{"event":"fail","code":"request"}' >> "$GITHUB_STEP_SUMMARY"
+            case "$code" in
+              ''|*[!0-9]*) code=000 ;;
+            esac
+            printf '%s\n' "{\"event\":\"fail\",\"code\":\"request\",\"status\":\"${code}\"}" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
           cat /tmp/enrich-body >> "$GITHUB_STEP_SUMMARY"
